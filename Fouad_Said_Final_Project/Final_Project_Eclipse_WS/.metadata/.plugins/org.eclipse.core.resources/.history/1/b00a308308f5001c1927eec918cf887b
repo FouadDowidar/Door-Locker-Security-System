@@ -1,0 +1,268 @@
+ /******************************************************************************
+ *
+ * Module: Door Locker Security System
+ *
+ * File Name: mc2.c
+ *
+ * Description: Source file for the Door Locker Security System
+ *
+ * Author: Fouad Dowidar
+ *
+ *******************************************************************************/
+#include"uart.h"
+#include"twi.h"
+#include"timer.h"
+#include"external_eeprom.h"
+#include"dcmotor.h"
+#include"buzzer.h"
+#include"lcd.h"
+#include"avr/io.h"
+#include <util/delay.h> /* For the delay functions */
+
+#define F_CPU 8000000
+#define SIZE 6
+
+uint16 g_Tick=0,final_Tick=0;
+
+uint8 flag_Check = 0;
+
+
+void delay(uint16 period);
+void startDelay(void);
+void buzzer_Alarm(void);
+
+void startDelay(void)
+{
+	g_Tick++;
+	if(g_Tick==final_Tick)
+	{
+		Timer_DeInit(TIMER1);
+	}
+}
+
+void delay(uint16 period)
+{
+	g_Tick=0;
+	final_Tick=period/100;
+	Timer_ConfigType Config_Ptr={0,3125,TIMER1,CTC,PRESCALER_256};
+	Timer_init(&Config_Ptr);
+	Timer_setCallBack(startDelay,TIMER1);
+	while(g_Tick!=final_Tick){}
+}
+
+void Save_EEPROM(uint8 *Password1,uint8* Password2)
+{
+
+
+	uint8 result;
+	uint8 key_num;
+	uint8 i;
+
+	UART_receiveString(Password1);
+
+	delay(200);
+
+	UART_receiveString(Password2);
+
+	for(i=0;i<6;i++)
+	{
+		if(Password1[i] == Password2[i])
+		{
+			result=1;
+		}
+		else
+		{
+			result=0;
+			break;
+		}
+	}
+
+	UART_sendByte(result);
+
+	if(result==0)
+	{
+		Save_EEPROM(Password1,Password2);
+	}
+	else if(result == 1)
+	{
+		LCD_clearScreen();
+		LCD_displayString("EEPROM Pass:");
+		LCD_moveCursor(1,0);
+
+		for(i=0 ; i<5 ; i++)
+		{
+			EEPROM_writeByte(0x0311+i,Password1[i]);
+			delay(100);
+		}
+
+		//Password[SIZE]=Password1[SIZE];
+
+		for(i=0 ; i<5 ; i++)
+		{
+			EEPROM_readByte(0x0311+i,&key_num);
+			delay(100);
+			if( (key_num >= 0) && (key_num <= 9) )
+			{
+				LCD_intgerToString(key_num);
+			}
+			else
+			{
+				LCD_displayCharacter(key_num);
+			}
+		}
+	}
+}
+
+void Check_Password(void)
+{
+	uint8 Password[SIZE];
+	uint8 result = 1;
+	uint8 EEPROM_PASS;
+	uint8 i;
+
+	UART_receiveString(Password);
+
+	for(i=0 ; i<5 ; i++)
+	{
+		EEPROM_readByte(0x0311+i,&EEPROM_PASS);
+		delay(100);
+
+		if(Password[i] != EEPROM_PASS)
+		{
+			result = 0;
+			flag_Check++;
+			break;
+		}
+	}
+
+	if(flag_Check == 3)
+	{
+		result = 2;
+		UART_sendByte(result);
+		flag_Check = 0;
+		buzzer_Alarm();
+		Check_Password();
+	}
+	if(result == 1)
+	{
+		UART_sendByte(result);
+		return;
+	}
+	else if(result == 0)
+	{
+		UART_sendByte(result);
+		Check_Password();
+	}
+}
+
+void buzzer_Alarm(void)
+{
+	Buzzer_init();
+	Buzzer_on();
+	delay(60000);
+	Buzzer_off();
+
+}
+
+void Open_Door(void)
+{
+	DcMotor_Init();
+
+	DcMotor_Rotate(CW);
+	delay(5000);
+
+	DcMotor_Rotate(STOP);
+	delay(5000);
+
+	DcMotor_Rotate(A_CW);
+	delay(5000);
+
+	DcMotor_Rotate(STOP);
+}
+
+int main(void)
+{
+
+	uint8 result = 0;
+	/*uint8 key_num;
+	uint8 i;*/
+
+
+	uint8 Password1[SIZE];
+	uint8 Password2[SIZE];
+
+	USART_ConfigType Config_Ptr = {9600,ASYNCHRONOUS,BIT_8,U2X_1,DISABLED,BIT_1};
+
+	/* Initialize the UART driver with Baud-rate = 9600 bits/sec */
+	UART_init(&Config_Ptr);
+
+	/*Initialize the LCD:*/
+	LCD_init();
+
+	TWI_ConfigType  Config_Ptr_TWI = {0B00000001,KBPS_400};
+
+	/* Initialize the TWI/I2C Driver */
+	TWI_init(&Config_Ptr_TWI);
+
+	while(1)
+	{
+		Save_EEPROM(Password1,Password2);
+		Check_Password();
+
+		result = UART_recieveByte();
+		if(result == 1)
+		{
+			Open_Door();
+		}
+
+		/*UART_receiveString(Password1); // Receive until (13) (enter)
+		LCD_displayString(Password1);
+
+		delay(1000);
+		LCD_clearScreen();
+
+		UART_receiveString(Password2);
+		LCD_displayString(Password2);
+
+		for(i=0;i<6;i++)
+		{
+			if(Password1[i] == Password2[i])
+			{
+				result=1;
+			}
+			else
+			{
+				result=0;
+				break;
+			}
+		}
+		UART_sendByte(result);
+
+		if(result == 1)
+		{
+			LCD_clearScreen();
+			LCD_displayString("EEPROM Pass:");
+			LCD_moveCursor(1,0);
+			for(i=0 ; i<5 ; i++)
+			{
+				EEPROM_writeByte(0x0311+i,Password1[i]);
+				delay(100);
+			}
+
+			for(i=0 ; i<5 ; i++)
+			{
+				EEPROM_readByte(0x0311+i,&key_num);
+				delay(100);
+				if( (key_num >= 0) && (key_num <= 9) )
+				{
+					LCD_intgerToString(key_num);
+				}
+				else
+				{
+					LCD_displayCharacter(key_num);
+				}
+			}*/
+	}
+}
+
+
